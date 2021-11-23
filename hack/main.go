@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	awsclient "github.com/aws/aws-sdk-go/aws/client"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
 // https://issues.redhat.com/browse/OSD-9044
@@ -38,8 +40,8 @@ func main() {
 		panic(fmt.Sprintf("Unable to load config for ec2 client: %s\n", err.Error()))
 	}
 
-	// https://docs.aws.amazon.com/sdk-for-go/api/aws/client/#New
-	ec2Client := awsclient.New(cfg, info, handlers)
+	// https://aws.github.io/aws-sdk-go-v2/docs/code-examples/ec2/createinstance/
+	ec2Client := ec2.NewFromConfig(cfg)
 
 	// Generate the userData file
 	userData, err := generateUserData(AWSRegion)
@@ -48,45 +50,46 @@ func main() {
 	}
 
 	// Create an ec2 instance
-	_, err := CreateEC2Instance(ec2Client, AMIID, InstanceType, InstanceCount, VPCSubnetID, SecurityGroupID, userData)
+	_, err = CreateEC2Instance(ec2Client, AMIID, InstanceType, InstanceCount, VPCSubnetID, SecurityGroupID, userData)
 	if err != nil {
 		panic(fmt.Sprintf("Unable to create EC2 Instance: %s\n", err.Error()))
 	}
 }
 
-func CreateEC2Instance(ec2Client *awsclient, amiID, instanceType, instanceCount, vpcSubnetID, securityGroupId, userdata string) (ec2.Reservation, error) {
+func CreateEC2Instance(ec2Client *ec2.Client, amiID, instanceType string, instanceCount int, vpcSubnetID, securityGroupId, userdata string) (ec2.RunInstancesOutput, error) {
 	// Build our request, converting the go base types into the pointers required by the SDK
 	instanceReq := ec2.RunInstancesInput{
 		ImageId:      aws.String(amiID),
-		MaxCount:     aws.Int64(instanceCount),
-		MinCount:     aws.Int64(instanceCount),
-		InstanceType: aws.String(instanceType),
+		MaxCount:     aws.Int32(int32(instanceCount)),
+		MinCount:     aws.Int32(int32(instanceCount)),
+		InstanceType: ec2Types.InstanceType(instanceType),
 		// Because we're making this VPC aware, we also have to include a network interface specification
-		NetworkInterfaces: []*ec2.InstanceNetworkInterfaceSpecification{
+		NetworkInterfaces: []ec2Types.InstanceNetworkInterfaceSpecification{
 			{
 				AssociatePublicIpAddress: aws.Bool(true),
-				DeviceIndex:              aws.Int64(0),
+				DeviceIndex:              aws.Int32(0),
 				SubnetId:                 aws.String(vpcSubnetID),
-				Groups: []*string{
-					aws.String(securityGroupId),
+				Groups: []string{
+					securityGroupId,
 				},
 			},
 		},
 		UserData: aws.String(userdata),
 	}
 	// Finally, we make our request
-	instanceResp, err := ec2client.RunInstances(&instanceReq)
+	instanceResp, err := ec2Client.RunInstances(context.TODO(), &instanceReq)
 	if err != nil {
-		return ec2.Reservation{}, err
+		return ec2.RunInstancesOutput{}, err
 	}
 
 	return *instanceResp, nil
 }
 
-func TerminateEC2Instance(client *awsclient, instanceID string) error {
-	_, err := client.TerminateInstances(&ec2.TerminateInstancesInput{
-		InstanceIds: aws.StringSlice([]string{instanceID}),
-	})
+func TerminateEC2Instance(ec2Client *ec2.Client, instanceID string) error {
+	input := ec2.TerminateInstancesInput{
+		InstanceIds: []string{instanceID},
+	}
+	_, err := ec2Client.TerminateInstances(context.TODO(), &input)
 	if err != nil {
 		//log message saying there's been an error while Terminating ec2 instance
 		return err
@@ -122,7 +125,7 @@ func generateUserData(awsRegion string) (string, error) {
 	data.WriteString(`docker run docker.io/tiwillia/network-validator-test:v0.1`)
 	data.WriteString(`echo "USERDATA END"`)
 
-	userData := base64.StdEncoding.EncodeToString([]byte(userData.String()))
+	userData := base64.StdEncoding.EncodeToString([]byte(data.String()))
 
 	return userData, nil
 }

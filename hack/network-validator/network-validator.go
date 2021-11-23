@@ -70,11 +70,9 @@ func TestEndpoints(cmd *cobra.Command, args []string) {
 	// need to validate any CDN such as `cdn01.quay.io` should be available?
 	//  We don't need to. We just best-effort check what we can.
 
-	// TODO we'll need some way to pull in the values for <cluster_id>-<shard>.<aws_region>.amazonaws.com to check
-	//      as well as .apps.<cluster_name>.<base_domain>, ec2.<aws_region>.amazonaws.com, and
-	//      CLUSTER-NAME-k5bxz-image-registry-<aws_region>-lsiflffxtmfyikx.s3.dualstack.us-east-1.amazonaws.com
-	//      and elasticloadbalancing.<aws_region>.amazonaws.com
-	//   This is also not necessary as these endpoints will not exist until the cluster is installed anyway.
+	// TODO we need a way to test the <aws_region> URLs:
+	// ec2.<aws_region>.amazonaws.com
+	// elasticloadbalancing.<aws_region>.amazonaws.com
 
 	failures := []error{}
 	for _, e := range config.Endpoints {
