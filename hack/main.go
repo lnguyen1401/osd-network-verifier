@@ -1,3 +1,5 @@
+
+
 package main
 
 import (
@@ -5,11 +7,14 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"time"
+    "errors"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 )
 
 // https://issues.redhat.com/browse/OSD-9044
@@ -50,11 +55,49 @@ func main() {
 	}
 
 	// Create an ec2 instance
-	_, err = CreateEC2Instance(ec2Client, AMIID, InstanceType, InstanceCount, VPCSubnetID, SecurityGroupID, userData)
+	instance, err:= CreateEC2Instance(ec2Client, AMIID, InstanceType, InstanceCount, VPCSubnetID, SecurityGroupID, userData)
 	if err != nil {
 		panic(fmt.Sprintf("Unable to create EC2 Instance: %s\n", err.Error()))
 	}
+	instanceID:= *instance.Instances[0].InstanceId
+     if err != nil {
+         panic(fmt.Sprintf("Unable to create EC2 Instance: %s\n", err.Error()))
+     }
+     //wait for the instance to run
+     var DescError error
+     totalWait := 25 * 60
+     currentWait := 1
+     // Double the wait time until we reach totalWait seconds
+     for totalWait > 0 {
+         currentWait = currentWait * 2
+         if currentWait > totalWait {
+             currentWait = totalWait
+         }
+         totalWait -= currentWait
+         time.Sleep(time.Duration(currentWait) * time.Second)
+         var code int
+         code, DescError = DescribeEC2Instances(ec2Client, instanceID)
+         if code == 16 { // 16 represents a successful region initialization
+             fmt.Printf("EC2 Instance: %s Running", instanceID)
+             break
+         } else if code == 401 { // 401 represents an UnauthorizedOperation error
+             // Missing permission to perform operations, account needs to fail
+             panic(fmt.Sprintf("Missing required permissions for account "))
+             fmt.Println(DescError)
+         }
 
+     }
+	if DescError != nil {
+         // Log an error and make sure that instance is terminated
+         DescErrorMsg := fmt.Sprintf("Could not get EC2 instance state, terminating instance %s", instanceID)
+ 
+         if DescError, ok := err.(awserr.Error); ok {
+             DescErrorMsg = fmt.Sprintf("Could not get EC2 instance state: %s, terminating instance %s", DescError.Code(), instanceID)
+         }
+ 
+         fmt.Println(DescError)
+         fmt.Println(DescErrorMsg)
+     }
 	// TODO Wait for instance creation to complete and gather userdata results
 	// Probably:
 	// 1. Create a loop
@@ -96,6 +139,38 @@ func CreateEC2Instance(ec2Client *ec2.Client, amiID, instanceType string, instan
 	}
 
 	return *instanceResp, nil
+}
+func DescribeEC2Instances( client *ec2.Client, instanceID string) (int, error) {
+     // States and codes
+     // 0 : pending
+     // 16 : running
+     // 32 : shutting-down
+     // 48 : terminated
+     // 64 : stopping
+     // 80 : stopped
+     // 401 : failed
+     result, err := client.DescribeInstanceStatus(context.TODO(), &ec2.DescribeInstanceStatusInput{
+         InstanceIds: []string{instanceID},
+     })
+ 
+     if err != nil {
+         panic(fmt.Sprintf("Errors while describing the instance status: %s\n", err.Error()))
+         if aerr, ok := err.(awserr.Error); ok {
+             if aerr.Code() == "UnauthorizedOperation" {
+                 return 401, err
+             }
+         }
+         return 0, err
+     }
+ 
+     if len(result.InstanceStatuses) > 1 {
+         return 0, errors.New("more than one EC2 instance found")
+     }
+ 
+     if len(result.InstanceStatuses) == 0 {
+         return 0, errors.New("no EC2 instances found")
+     }
+     return int(*result.InstanceStatuses[0].InstanceState.Code), nil
 }
 
 func TerminateEC2Instance(ec2Client *ec2.Client, instanceID string) error {
