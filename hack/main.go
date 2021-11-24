@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	// TODO user sdk-go-v2, not v1
 	"github.com/aws/aws-sdk-go/aws/awserr"
 )
 
@@ -22,9 +23,8 @@ import (
 // Generate userData file
 // Create EC2 instance
 //   This can just use hard-coded config values for now
-
-// Helpful links/examples:
-//   Build/destroy EC2 instance: https://github.com/openshift/aws-account-operator/blob/aac458f52f530359c9a9f07f3231ca17b82689fd/pkg/controller/account/ec2.go#L190
+// Collect userdata results from console output
+// Filter userdata results and determine success/failure
 
 var (
 	AMIID           string = "ami-0df9a9ade3c65a1c7"
@@ -59,11 +59,19 @@ func main() {
 	}
 	instanceID := *instance.Instances[0].InstanceId
 
+	// Wait for the ec2 instance to be running
 	fmt.Printf("Waiting for EC2 instance %s to be running\n", instanceID)
 	err = WaitForEC2InstanceCompletion(ec2Client, instanceID)
 	if err != nil {
 		panic(err)
 	}
+
+	// TODO Gather console output via SDK from the instance
+	//  NOTE it appears even though the instance is running, it may not have run the
+	//   userData script. It looks like we'll just have to check for console output until
+	//   it is there, as we don't seem to have any other indication that the userdata
+	//   script has completed.
+	// https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/service/ec2#Client.GetConsoleOutput
 
 	// TODO report userdata success/failure and errors
 	fmt.Println("TODO: Gather and parse console log output")
@@ -214,6 +222,8 @@ func generateUserData(awsRegion string) (string, error) {
 	fmt.Fprintf(&data, "export SHARD=%s\n", shard)
 	fmt.Fprintf(&data, "export BASE_DOMAIN=%s\n", baseDomain)
 	*/
+
+	// TODO consider installing docker here instead of in an AMI
 
 	data.WriteString(`echo "USERDATA BEGIN"` + "\n")
 	data.WriteString("docker pull docker.io/tiwillia/network-validator-test:v0.1\n")
