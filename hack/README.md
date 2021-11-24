@@ -1,32 +1,47 @@
-Running the main PoC script:
----
+# VPC Network verifier PoC
+
+This PoC aims to create an EC2 instance in a particular VPC that runs a network verification test and returns results to the PoC without the need for SSH.
+
+## Running the main PoC script:
+
 Properly define AWS-account specific variables at the top of the script
 
 Ensure the proper locally configured AWS profile is being used:
+```
 $ export AWS_PROFILE=linh
+```
 
 Run the script:
+```
 $ go run main.go
+```
 
-Building the docker image
-----
-# Build the network-validator tool with go
+## Building the docker image
+
+Build the network-validator tool with go
+```
 # Note that CGO_ENABLED=0 is required for cross-platform compatibility
 $ CGO_ENABLED=0 go build network-validator.go
+```
 
-# Build and tag the docker image
+Build and tag the docker image
+```
 $ docker build . -t tiwillia/network-validator-test:v0.1
+```
 
-# Run it to make sure it works
+Run it to make sure it works
+```
 $ docker run tiwillia/network-validator-test:v0.1
+```
 
-# Push the image to docker.io
+Push the image to docker.io
+```
 $ docker login docker.io
 $ docker push tiwillia/network-validator-test:v0.1
+```
 
-Helpful links:
-----
-Execllent example for copy/paste:
+## Helpful links:
+Execllent example for AWS operations:
   https://github.com/openshift/aws-account-operator/blob/c761b484873f1bcb3591d8cede0583f65e69f391/pkg/controller/account/ec2.go#L206
 AWS SDK links:
   https://aws.github.io/aws-sdk-go-v2/docs/code-examples/ec2/createinstance/
