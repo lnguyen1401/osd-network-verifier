@@ -1,14 +1,12 @@
-
-
 package main
 
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
-    "errors"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -55,57 +53,20 @@ func main() {
 	}
 
 	// Create an ec2 instance
-	instance, err:= CreateEC2Instance(ec2Client, AMIID, InstanceType, InstanceCount, VPCSubnetID, SecurityGroupID, userData)
+	instance, err := CreateEC2Instance(ec2Client, AMIID, InstanceType, InstanceCount, VPCSubnetID, SecurityGroupID, userData)
 	if err != nil {
 		panic(fmt.Sprintf("Unable to create EC2 Instance: %s\n", err.Error()))
 	}
-	instanceID:= *instance.Instances[0].InstanceId
-     if err != nil {
-         panic(fmt.Sprintf("Unable to create EC2 Instance: %s\n", err.Error()))
-     }
-     //wait for the instance to run
-     var DescError error
-     totalWait := 25 * 60
-     currentWait := 1
-     // Double the wait time until we reach totalWait seconds
-     for totalWait > 0 {
-         currentWait = currentWait * 2
-         if currentWait > totalWait {
-             currentWait = totalWait
-         }
-         totalWait -= currentWait
-         time.Sleep(time.Duration(currentWait) * time.Second)
-         var code int
-         code, DescError = DescribeEC2Instances(ec2Client, instanceID)
-         if code == 16 { // 16 represents a successful region initialization
-             fmt.Printf("EC2 Instance: %s Running", instanceID)
-             break
-         } else if code == 401 { // 401 represents an UnauthorizedOperation error
-             // Missing permission to perform operations, account needs to fail
-             panic(fmt.Sprintf("Missing required permissions for account "))
-             fmt.Println(DescError)
-         }
+	instanceID := *instance.Instances[0].InstanceId
 
-     }
-	if DescError != nil {
-         // Log an error and make sure that instance is terminated
-         DescErrorMsg := fmt.Sprintf("Could not get EC2 instance state, terminating instance %s", instanceID)
- 
-         if DescError, ok := err.(awserr.Error); ok {
-             DescErrorMsg = fmt.Sprintf("Could not get EC2 instance state: %s, terminating instance %s", DescError.Code(), instanceID)
-         }
- 
-         fmt.Println(DescError)
-         fmt.Println(DescErrorMsg)
-     }
-	// TODO Wait for instance creation to complete and gather userdata results
-	// Probably:
-	// 1. Create a loop
-	//     - Check for output in the EC2 instance console
-	//     - If no output, wait 10s and retry
-	//     - If output exists, exit loop
+	fmt.Printf("Waiting for EC2 instance %s to be running\n", instanceID)
+	err = WaitForEC2InstanceCompletion(ec2Client, instanceID)
+	if err != nil {
+		panic(err)
+	}
 
 	// TODO report userdata success/failure and errors
+	fmt.Println("TODO: Gather and parse console log output")
 }
 
 func CreateEC2Instance(ec2Client *ec2.Client, amiID, instanceType string, instanceCount int, vpcSubnetID, securityGroupId, userdata string) (ec2.RunInstancesOutput, error) {
@@ -140,37 +101,83 @@ func CreateEC2Instance(ec2Client *ec2.Client, amiID, instanceType string, instan
 
 	return *instanceResp, nil
 }
-func DescribeEC2Instances( client *ec2.Client, instanceID string) (int, error) {
-     // States and codes
-     // 0 : pending
-     // 16 : running
-     // 32 : shutting-down
-     // 48 : terminated
-     // 64 : stopping
-     // 80 : stopped
-     // 401 : failed
-     result, err := client.DescribeInstanceStatus(context.TODO(), &ec2.DescribeInstanceStatusInput{
-         InstanceIds: []string{instanceID},
-     })
- 
-     if err != nil {
-         panic(fmt.Sprintf("Errors while describing the instance status: %s\n", err.Error()))
-         if aerr, ok := err.(awserr.Error); ok {
-             if aerr.Code() == "UnauthorizedOperation" {
-                 return 401, err
-             }
-         }
-         return 0, err
-     }
- 
-     if len(result.InstanceStatuses) > 1 {
-         return 0, errors.New("more than one EC2 instance found")
-     }
- 
-     if len(result.InstanceStatuses) == 0 {
-         return 0, errors.New("no EC2 instances found")
-     }
-     return int(*result.InstanceStatuses[0].InstanceState.Code), nil
+
+// Returns state code as int
+func DescribeEC2Instances(client *ec2.Client, instanceID string) (int, error) {
+	// States and codes
+	// 0 : pending
+	// 16 : running
+	// 32 : shutting-down
+	// 48 : terminated
+	// 64 : stopping
+	// 80 : stopped
+	// 401 : failed
+	result, err := client.DescribeInstanceStatus(context.TODO(), &ec2.DescribeInstanceStatusInput{
+		InstanceIds: []string{instanceID},
+	})
+
+	if err != nil {
+		panic(fmt.Sprintf("Errors while describing the instance status: %s\n", err.Error()))
+		if aerr, ok := err.(awserr.Error); ok {
+			if aerr.Code() == "UnauthorizedOperation" {
+				return 401, err
+			}
+		}
+		return 0, err
+	}
+
+	if len(result.InstanceStatuses) > 1 {
+		return 0, errors.New("more than one EC2 instance found")
+	}
+
+	if len(result.InstanceStatuses) == 0 {
+		// Don't return an error here as if the instance is still too new, it may not be
+		// retured at all.
+		//return 0, errors.New("no EC2 instances found")
+		fmt.Printf("Instance %s has no status yet\n", instanceID)
+		return 0, nil
+	}
+
+	return int(*result.InstanceStatuses[0].InstanceState.Code), nil
+}
+
+func WaitForEC2InstanceCompletion(ec2Client *ec2.Client, instanceID string) error {
+	//wait for the instance to run
+	var descError error
+	totalWait := 25 * 60
+	currentWait := 1
+	// Double the wait time until we reach totalWait seconds
+	for totalWait > 0 {
+		currentWait = currentWait * 2
+		if currentWait > totalWait {
+			currentWait = totalWait
+		}
+		totalWait -= currentWait
+		time.Sleep(time.Duration(currentWait) * time.Second)
+		var code int
+		code, descError = DescribeEC2Instances(ec2Client, instanceID)
+		if code == 16 { // 16 represents a successful region initialization
+			// Instance is running, break
+			break
+		} else if code == 401 { // 401 represents an UnauthorizedOperation error
+			// Missing permission to perform operations, account needs to fail
+			return fmt.Errorf("Missing required permissions for account: %s", descError)
+		}
+
+		if descError != nil {
+			// Log an error and make sure that instance is terminated
+			descErrorMsg := fmt.Sprintf("Could not get EC2 instance state, terminating instance %s", instanceID)
+
+			if descError, ok := descError.(awserr.Error); ok {
+				descErrorMsg = fmt.Sprintf("Could not get EC2 instance state: %s, terminating instance %s", descError.Code(), instanceID)
+			}
+
+			return fmt.Errorf("%s: %s", descError, descErrorMsg)
+		}
+	}
+
+	fmt.Printf("EC2 Instance: %s Running\n", instanceID)
+	return nil
 }
 
 func TerminateEC2Instance(ec2Client *ec2.Client, instanceID string) error {
