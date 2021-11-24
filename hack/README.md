@@ -43,6 +43,12 @@ $ docker push tiwillia/network-validator-test:v0.1
 ## Helpful links:
 Execllent example for AWS operations:
   https://github.com/openshift/aws-account-operator/blob/c761b484873f1bcb3591d8cede0583f65e69f391/pkg/controller/account/ec2.go#L206
+
 AWS SDK links:
   https://aws.github.io/aws-sdk-go-v2/docs/code-examples/ec2/createinstance/
   https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/service/ec2
+
+## Possible Issues with this approach:
+- This requires an AMI to be created following the steps in https://aws.amazon.com/premiumsupport/knowledge-center/ec2-linux-rhel7-rhel8-log-user-data/
+- The console output only contains the most recent 64Kb of text. If something occurs in the AMI after the userData script is run that produces a 64Kb+ of text, its possible that the userData script output is lost.
+- The console output contains much more than just the userData output. Filtering for the userData output and being able to reliably determine the results of the script may be brittle.
