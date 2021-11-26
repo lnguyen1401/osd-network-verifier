@@ -12,8 +12,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+
 	// TODO user sdk-go-v2, not v1
+	"regexp"
+
 	"github.com/aws/aws-sdk-go/aws/awserr"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // https://issues.redhat.com/browse/OSD-9044
@@ -74,7 +78,17 @@ func main() {
 	// https://pkg.go.dev/github.com/aws/aws-sdk-go-v2/service/ec2#Client.GetConsoleOutput
 
 	// TODO report userdata success/failure and errors
-	fmt.Println("TODO: Gather and parse console log output")
+	fmt.Println("Gather and parse console log output")
+	unreachableEndpoints, err := FindUnreachableEndpoints(ec2Client, instanceID)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(unreachableEndpoints)
+
+	fmt.Println("Terminating instance")
+	if err := TerminateEC2Instance(ec2Client, instanceID); err != nil {
+		panic(err)
+	}
 }
 
 func CreateEC2Instance(ec2Client *ec2.Client, amiID, instanceType string, instanceCount int, vpcSubnetID, securityGroupId, userdata string) (ec2.RunInstancesOutput, error) {
@@ -125,7 +139,7 @@ func DescribeEC2Instances(client *ec2.Client, instanceID string) (int, error) {
 	})
 
 	if err != nil {
-		panic(fmt.Sprintf("Errors while describing the instance status: %s\n", err.Error()))
+		fmt.Printf("Errors while describing the instance status: %s\n", err.Error())
 		if aerr, ok := err.(awserr.Error); ok {
 			if aerr.Code() == "UnauthorizedOperation" {
 				return 401, err
@@ -188,6 +202,29 @@ func WaitForEC2InstanceCompletion(ec2Client *ec2.Client, instanceID string) erro
 	return nil
 }
 
+func FindUnreachableEndpoints(ec2Client *ec2.Client, instanceID string) ([]string, error) {
+	var match []string
+
+	err := wait.PollImmediate(30*time.Second, 10*time.Minute, func() (bool, error) {
+		output, err := ec2Client.GetConsoleOutput(context.TODO(), &ec2.GetConsoleOutputInput{InstanceId: &instanceID})
+		if err == nil && output.Output != nil {
+			// Find unreachable targets from output
+			scriptOutput, err := base64.StdEncoding.DecodeString(*output.Output)
+			if err != nil {
+				// unable to decode output. we will try again
+				return false, nil
+			}
+			re := regexp.MustCompile(`Unable to reach (\S+)`)
+			match = re.FindAllString(string(scriptOutput), -1)
+
+			return true, nil
+		}
+		fmt.Print("waiting for UserData script to complete\n")
+		return false, nil
+	})
+	return match, err
+}
+
 func TerminateEC2Instance(ec2Client *ec2.Client, instanceID string) error {
 	input := ec2.TerminateInstancesInput{
 		InstanceIds: []string{instanceID},
@@ -226,8 +263,11 @@ func generateUserData(awsRegion string) (string, error) {
 	// TODO consider installing docker here instead of in an AMI
 
 	data.WriteString(`echo "USERDATA BEGIN"` + "\n")
-	data.WriteString("docker pull docker.io/tiwillia/network-validator-test:v0.1\n")
-	data.WriteString("docker run docker.io/tiwillia/network-validator-test:v0.1\n")
+	data.WriteString("sudo yum update -y\n")
+	data.WriteString("sudo amazon-linux-extras install docker\n")
+	data.WriteString("sudo service docker start\n")
+	data.WriteString("sudo docker pull docker.io/tiwillia/network-validator-test:v0.1\n")
+	data.WriteString("sudo docker run docker.io/tiwillia/network-validator-test:v0.1\n")
 	data.WriteString(`echo "USERDATA END"` + "\n")
 
 	userData := base64.StdEncoding.EncodeToString([]byte(data.String()))
